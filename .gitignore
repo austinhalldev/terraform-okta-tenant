@@ -5,3 +5,5 @@
 *.tfvars
 !*.tfvars.example
 crash.log
+private_key.json
+.env
