@@ -91,3 +91,140 @@ as residual risk; here the tooling closes that gap by default.
 quoted the vendor README's "highest recommended version" as current. It
 wasn't; the release tags were newer than the prose. Read the tags, not
 the README.
+
+### 3. Terraform requires super admin, and that is not a configuration choice
+
+The Terraform service app is granted the Super Administrator standard
+role. Scopes are minimum viable — `okta.apps.read`, `okta.apps.manage`,
+`okta.roles.read`, `okta.roles.manage` — but the role is the broadest
+one Okta has.
+
+**The easier path, and the one I went looking for:** a custom admin role
+scoped to exactly the objects this project manages, mirroring what
+svc-okta-identity-mcp already does. Two read permissions there; some
+small manage set here.
+
+**Why not — it does not exist.** Okta's custom role permission picker
+has one entry under Identity and Access Management: *View roles,
+resources, and admin assignments*. There is no manage counterpart. A
+custom role can be granted the ability to read roles, resource sets, and
+admin assignments, and cannot be granted the ability to create, change,
+or delete them.
+
+The two fallbacks close as well. Organization Administrator, per its own
+console description, cannot manage applications or other admins — which
+is precisely the two things needed here. Super Administrator is what
+remains.
+
+**Why this is structural rather than a gap in Okta:** if a custom role
+could grant role management, any principal holding it could author a new
+role carrying any permission in the tenant. A bounded grant that includes
+the power to unbound itself is not bounded. Role management is privilege
+escalation by construction, so the only coherent place to put it is the
+top. This is the correct design, not an oversight, and I would expect the
+same shape in any IAM system that supports delegated administration.
+
+**The consequence, stated plainly:** codifying least privilege requires
+a credential that holds everything. svc-okta-identity-mcp runs on two
+read permissions. The app that creates and maintains that configuration
+is a super admin. The tightest object in the tenant is produced by the
+loosest credential in it, and there is no arrangement of scopes and roles
+that avoids this.
+
+**What this does to auditability, which is the part I initially had
+backwards.** Console clicking has one real virtue: Okta's System Log
+attributes every change to the human admin who made it, for free, enforced
+by the IdP. Routing changes through Terraform destroys that. Every change
+is now attributed to one service app, and Okta can no longer say which
+person caused it.
+
+Accountability therefore does not come from Terraform. It moves to git —
+commit authorship, review, and branch protection — and Terraform is
+simply what makes that possible. Run Terraform from a laptop with no PR
+discipline and the result is strictly worse than console clicking: all
+changes concentrated into a single super-admin identity, with the
+attribution that used to be automatic now gone and nothing put in its
+place.
+
+This is why the IaC half is not the deliverable. The GitOps half is where
+the accountability lives, and without it this project would be a
+regression.
+
+**What has to be true for the trade to pay off:**
+
+- Changes reach the tenant through a reviewed path — see entry 4 for why
+  this project implements only half of one.
+- The credential lives where a human cannot casually invoke it.
+- Console write access is reduced, or plans report drift forever and the
+  code becomes documentation that lies.
+- A break-glass path exists, is logged, and its changes are back-ported
+  to code.
+
+**What is true here instead, recorded rather than glossed:** this is a
+sandbox tenant with one dependant, my own MCP server. I retain super
+admin in the console. Nothing in the list above is enforced yet; the CI
+workflow that would enforce the first two isn't built. The credential
+being created in this session is a super admin credential on a
+workstation, which is the exact posture this entry argues against. It is
+acceptable here only because the blast radius is a tenant I can rebuild,
+and it should not be mistaken for the recommended arrangement.
+
+**Open question, recorded rather than resolved:** whether
+`okta_app_oauth_api_scope` works at all under OAuth 2.0 provider
+authentication. Okta documents that some objects have no corresponding
+scope, and specifically that there is no scope for managing scopes. If
+the API scope grants turn out not to be codifiable, that is a fifth object
+staying in the console permanently, and the boundary is worth recording
+precisely rather than working around silently.
+
+### 4. Plan in CI, apply by hand — because I am the only reviewer
+
+The GitHub Actions workflow runs `terraform plan` on pull requests and
+posts the output as a comment. It does not run `terraform apply`. Applying
+is done by hand from the devcontainer, using the super admin credential
+from entry 3, which never leaves that machine.
+
+**The easier path, and the one entry 3 argues for:** apply on merge. The
+pipeline holds the credential, merging is the deploy, and no human is ever
+in a position to change the tenant directly. That is the arrangement that
+makes entry 3's accountability argument actually true, and in an org with
+real reviewers it is the correct answer.
+
+**Why not, here:** apply-on-merge requires storing a super admin
+credential in GitHub Actions secrets, fired automatically by a merge. That
+is safe when a merge means several engineers reviewed the change. This is
+a one-person repository. A merge here means I approved my own work, so the
+review step the automation depends on does not exist. Automating apply
+under those conditions would not produce accountability; it would produce
+a super admin credential on a hair trigger, with a review gate that is
+theater.
+
+Branch protection makes this structural rather than a matter of
+discipline: the common configuration requires approval from someone other
+than the author, and a solo repository cannot satisfy that rule. The
+constraint is real, not a shortcut.
+
+**What plan-only still buys:** the pull request carries the plan output,
+so what gets reviewed is the effect on the tenant rather than a diff of
+HCL. That is the review that matters — "changes a description" and
+"destroys and recreates the app, minting a new client ID" are one line
+apart in configuration and very far apart in consequence. It also means
+the credential CI holds can be read-scoped rather than super admin.
+
+**What it does not buy, stated rather than glossed:** nothing prevents me
+applying a change that never appeared in a pull request. The discipline
+is mine to keep and nothing enforces it. Entry 3's requirement that
+changes reach the tenant only through a reviewed path is therefore not
+met by this project; it is half-met, deliberately, and the missing half
+is named here rather than left implied.
+
+**A note on the read-scoped CI credential:** plan reads every object it
+manages, so "read-only" still means a credential that can enumerate the
+tenant's admin configuration. Less dangerous than write. Not nothing.
+
+**What would change this in an org:** required reviews from people other
+than the author, protected branches, restricted review on the workflow
+file itself — it lives in the repository it protects, so a pull request
+can modify the pipeline — and environment approvals gating the credential
+separately from merge. With those in place, apply-on-merge is right and
+this entry's reasoning no longer applies.
