@@ -16,7 +16,7 @@ admin role, its resource set, the role binding, and the granted API
 scopes — are the same objects the MCP server depends on, so this project
 manages the configuration that the previous one runs on.
 
-Sessions: 3 September 2026 (scaffold, decisions 1-2).
+Sessions: 3 September 2026 (scaffold, decisions 1-4).
 
 ---
 
