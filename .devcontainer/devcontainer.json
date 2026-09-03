@@ -1,0 +1,7 @@
+{
+  "name": "terraform-okta-tenant",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/terraform:1": {}
+  }
+}
