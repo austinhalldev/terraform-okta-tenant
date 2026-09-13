@@ -16,7 +16,8 @@ admin role, its resource set, the role binding, and the granted API
 scopes — are the same objects the MCP server depends on, so this project
 manages the configuration that the previous one runs on.
 
-Sessions: 3 September 2026 (scaffold, decisions 1-4).
+Sessions: 3 September 2026 (scaffold, decisions 1-4), 12 September 2026
+(four objects imported, decisions 5-7).
 
 ---
 
@@ -228,3 +229,120 @@ file itself — it lives in the repository it protects, so a pull request
 can modify the pipeline — and environment approvals gating the credential
 separately from merge. With those in place, apply-on-merge is right and
 this entry's reasoning no longer applies.
+
+### 5. Import is a three-step loop, and the tooling fails differently at each step
+
+All four objects (the API Services app, the custom admin role, the resource
+set, and the role binding) are now under Terraform management with a
+zero-diff plan. The loop per object is: declare the object exists (an
+`import` block), obtain a description of it, confirm the description matches
+reality (`plan` reporting no changes). Each step failed at least once, and
+the failures were more instructive than the successes.
+
+**Config generation needs the provider named; the resource block then
+forbids it.** `terraform plan -generate-config-out` could not resolve
+`okta_admin_role_custom` to a provider, defaulted to the `hashicorp`
+namespace, and failed. HashiCorp documents the fix as adding a `provider`
+block and re-running `init`; that did not resolve it. Adding
+`provider = okta` inside the import block did. Once the generated resource
+block was moved into configuration, that same argument became an error: the
+provider argument is only valid in import blocks that generate
+configuration.
+
+The reasoning is sound. A resource block is where provider association
+belongs, so permitting it in both places would allow two lines to disagree.
+But the sequence is undocumented as far as I could find, and the error
+surfaced as "Inconsistent dependency lock file" with the real cause nested
+inside. The parse failure meant provider requirements could not be computed,
+and the lock check failed downstream. Loud line, quiet cause.
+
+**Generated configuration does not validate.** For the resource set, the
+generator emitted both `resources` and `resources_orn` as null. The provider
+requires exactly one, so generation produced configuration that fails its
+own validation. The two fields are alternative representations of the same
+thing, REST URLs or Okta Resource Names, and the generator could not choose.
+Written by hand instead.
+
+**Generated configuration includes attributes the object cannot have.** For
+the service app, the generator emitted `omit_secret`,
+`refresh_token_leeway`, `refresh_token_rotation`, and
+`skip_authentication_policy`. Okta returned 403 on the update. These are
+refresh-token, client-secret, and sign-on-policy attributes. None apply to a
+`client_credentials` app authenticating with `private_key_jwt`. The
+generator is schema-aware but not app-type-aware: it writes every attribute
+the provider supports, whether or not the object can hold it. Removing the
+four lines produced a clean plan.
+
+**What this cost, and what it is worth:** a 403 on an app update is
+indistinguishable at first glance from a permissions problem. I checked the
+service app's scopes and role assignment before concluding otherwise, which
+was the right order, but only because the console eventually stated plainly
+that a Super Administrator assignment "cannot be further constrained and
+will be active for the entire org." Without that line I would have kept
+looking at permissions.
+
+Config generation is flagged experimental. It is worth using. It supplied
+field names I would not have guessed and the correct values for everything
+that did apply. But its output is a draft, not configuration.
+
+### 6. Two tools, one tenant, one auth pattern, incompatible key formats
+
+The Terraform provider authenticates with a PKCS#8 PEM private key.
+svc-okta-log-triage and svc-okta-identity-mcp authenticate with a JWK. Both
+use `private_key_jwt` against the same Okta tenant, with the same kind of
+service app. The key generated for the first two projects does not work for
+Terraform; the provider reports "invalid private key," which is accurate and
+easy to misread as a corrupt or mismatched key rather than a format
+mismatch.
+
+Okta's console will generate either format. A second keypair was generated
+in PEM, registered as an additional public key on the service app, and the
+original removed. This is the same multiple-public-key capability recorded
+in entry 3 of svc-okta-identity-mcp's journal as what makes per-machine keys
+and zero-downtime rotation possible.
+
+**Worth stating because it is easy to gloss:** there is nothing wrong with
+either tool. A Python project parsing JWK and a Go provider expecting PEM
+are both reasonable. But a service app is a single object with one set of
+registered public keys, and a person moving between two projects against the
+same tenant will reasonably assume the credential material is portable. It
+is not. The format is a property of the consuming tool, not of the app.
+
+### 7. The role binding was recreated rather than imported
+
+The binding between the custom role, the resource set, and the MCP service
+app was deleted in the console and recreated by Terraform, rather than
+imported like the other three objects.
+
+**Why:** the import ID for `okta_app_oauth_role_assignment` is
+`<clientID>/<roleAssignmentID>`. The role assignment ID is not exposed
+anywhere in the Admin Console. Obtaining it requires calling
+`GET /oauth2/v1/clients/{clientId}/roles`, an authenticated API call, which
+in this container would have meant writing a signing script in bash, since
+the Terraform devcontainer deliberately has no Python.
+
+**Why this was acceptable here and would not be in production:** the binding
+is a pure join. It holds no data and nothing references its ID, unlike the
+service app whose client ID is configured in svc-okta-identity-mcp. Deleting
+and recreating produces an identical result. But between the delete and the
+apply there is a window with no grant, which for a live integration is a
+permissions outage. In production the correct answer is to find the ID and
+import, precisely to avoid that window.
+
+The general rule this follows: **import when the object's identity is
+referenced elsewhere, recreate when it is not.** Recreation during a
+migration is a legitimate tactic. It is not a default, and the condition
+that makes it safe should be stated rather than assumed.
+
+**A side benefit worth noting:** the recreated binding references
+`okta_admin_role_custom.mcp_read_only.id` and
+`okta_resource_set.mcp_resources.id` rather than literal IDs, so Terraform
+knows the dependency order. An imported binding would have carried hardcoded
+IDs and expressed no relationship.
+
+**One correction to the record:** the console permission labels do not match
+the API. What the console calls "view users' profile attributes" is
+`okta.users.userprofile.read`, and "View groups and their details" is
+`okta.groups.read`. svc-okta-identity-mcp's README hedges on this, noting
+the wording shifts between console versions. The API names are the stable
+ones, and that README should say so.
