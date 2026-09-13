@@ -346,3 +346,54 @@ the API. What the console calls "view users' profile attributes" is
 `okta.groups.read`. svc-okta-identity-mcp's README hedges on this, noting
 the wording shifts between console versions. The API names are the stable
 ones, and that README should say so.
+
+### 8. API scope grants are not codifiable, and the boundary is authentication, not privilege
+
+Entry 3 recorded an open question: whether `okta_app_oauth_api_scope` works
+under OAuth 2.0 provider authentication. It does not. The resource has been
+removed from the configuration and the two scope grants on
+svc-okta-identity-mcp remain a console operation.
+
+**What was tested.** `terraform apply` against a correctly-formed resource
+returned "The access token provided does not contain the required scopes"
+from the Application Grants endpoint. The service app holds Super
+Administrator, unconstrained, and `okta.apps.manage`, which is the scope the
+endpoint would plausibly require.
+
+The first hypothesis was that a client cannot grant a scope it does not
+itself hold, which would be a sensible privilege-escalation guard.
+`okta.users.read` and `okta.groups.read` were temporarily granted to the
+Terraform service app and the apply retried. Identical error. The hypothesis
+is wrong, and the scopes were revoked immediately afterward.
+
+**What remains, and it matches Okta's own documentation:** some objects have
+no corresponding OAuth scope, and specifically there is no scope for
+managing scopes. A service app cannot grant API scopes no matter what it
+holds, because the capability is not expressible in the scope system at all.
+Okta's guide states separately that granting new API scopes to a service app
+requires Super Administrator permission, which is a statement about human
+admins rather than about tokens.
+
+**Why this is a different shape from entry 3.** Entry 3 found that
+least-privilege objects require a maximum-privilege credential: a problem of
+degree, solved badly but solved. This is a problem of kind. No credential
+of any privilege level, authenticating this way, can perform this operation.
+The ceiling on what is codifiable here is set by the authentication method,
+not by the permissions attached to it.
+
+**What was deliberately not tested.** The provider also supports SSWS API
+token authentication, tied to a human admin account rather than a service
+app. The grant may well succeed that way, which would narrow the finding to
+"not codifiable under OAuth 2.0 provider authentication." That test was
+declined: an API token bound to my own admin user is the credential model
+decisions 3 and 4 exist to argue against, and confirming a boundary is not
+worth introducing one, even briefly. The finding is therefore recorded at
+the precision actually established and not beyond it.
+
+**Consequence for the project, stated plainly.** Four of five objects are
+under Terraform management. The fifth is not, and this is a permanent
+exception rather than unfinished work. The README and this journal name it,
+so a reader can tell the difference between a documented boundary and a gap
+someone forgot to close. That distinction is the one most migrations get
+wrong: not that something was left manual, but that nobody wrote down which
+things were left manual on purpose.
