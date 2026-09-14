@@ -17,7 +17,8 @@ scopes — are the same objects the MCP server depends on, so this project
 manages the configuration that the previous one runs on.
 
 Sessions: 3 September 2026 (scaffold, decisions 1-4), 12 September 2026
-(four objects imported, decisions 5-7).
+(four objects imported, decisions 5-8), 14 September 2026 (state to S3,
+published, first PR, decisions 9-11).
 
 ---
 
@@ -397,3 +398,101 @@ so a reader can tell the difference between a documented boundary and a gap
 someone forgot to close. That distinction is the one most migrations get
 wrong: not that something was left manual, but that nobody wrote down which
 things were left manual on purpose.
+
+### 9. State moved to S3, and the bucket is a third bootstrap object
+
+Terraform state now lives in an S3 bucket, encrypted with SSE-S3, versioned,
+with native locking enabled through `use_lockfile = true`. Migrated with
+`terraform init -migrate-state`.
+
+**Why not leave it local.** A local state file exists in exactly one place.
+Losing it means Terraform no longer knows it owns anything and will attempt
+to create duplicates of objects that already exist. It also cannot be reached
+by anything but the machine holding it, which forecloses the CI workflow in
+decision 4.
+
+**Why not DynamoDB.** Most guides describe a DynamoDB table for state
+locking. That mechanism is deprecated. S3 conditional writes now support
+locking directly, and `use_lockfile = true` on the backend block replaces the
+table entirely. This is the second time in this project that the
+highest-ranked search results described a pattern the vendor is retiring; see
+decision 2 for the first.
+
+**Why versioning is not optional.** It is what makes a corrupted or truncated
+state file recoverable, and it cannot be applied retroactively to objects
+already written. It also holds the lock object.
+
+**What the bucket contains, and who can read it.** State holds the client ID,
+the tenant hostname, the role and resource set IDs, and the public key. Read
+access to the bucket therefore discloses the tenant's privileged
+configuration without any access to Okta. Write access is worse: state is
+what Terraform believes, so altering it makes Terraform act on a false
+picture — pointing an entry at a different object's ID would cause the next
+apply to modify that object instead, with no error. The IAM policy is scoped
+to `s3:ListBucket` on this one bucket and get, put, and delete on objects
+within it. Nothing broader.
+
+**A credential quality note.** The AWS access key is a long-lived shared
+secret sent with every request, which is weaker than the Okta credential,
+where a private key signs an assertion and never crosses the network. The
+better answer for automation is short-lived credentials through OIDC. Not
+implemented here; named so it is not mistaken for an oversight.
+
+**Third bootstrap object.** The bucket cannot be created by the run that
+stores its state in it, so it was created by hand, as were the IAM user and
+policy. Decision 1 predicted this; it is now concrete rather than
+hypothetical.
+
+### 10. The repository is public, and what that required
+
+Published at github.com/austinhalldev/terraform-okta-tenant.
+
+**What was verified first.** `git ls-files` to confirm exactly what was
+tracked, a search of history for any filename matching env, pem, tfstate, or
+key, and a grep of every `.tf` file for the tenant hostname and client ID
+prefix. All clean. The tenant hostname, client ID, key ID, RSA modulus, and
+authentication policy ID are Terraform variables supplied from a gitignored
+`.env`; `.env.example` is committed with placeholders.
+
+**The split between secrecy and portability, because they are not the same
+thing.** The key ID and client ID are variables because they are values I
+have chosen not to publish. The RSA modulus and the policy ID are variables
+for a different reason: the modulus is a public key and discloses nothing,
+and the policy ID is an opaque identifier. They are parameterised so the
+configuration is portable to another tenant rather than to keep them secret.
+Treating every value as a secret is a weaker position than knowing which
+ones are.
+
+**The repository was created private and made public after review.** The
+gitignore rules had never been tested against a real push. The first test of
+an ignore rule should not happen against a public repository.
+
+### 11. One change through a pull request, end to end
+
+A one-line change to the custom role description, taken through a branch, a
+pull request, a merge, and an apply. The purpose was the process rather than
+the change.
+
+The sequence: branch from `main`, edit `roles.tf`, run `terraform plan` and
+confirm `1 to change, 0 to destroy`, commit, push, open a pull request,
+review the diff, merge, pull `main`, apply, verify in the Okta console.
+
+**What the pull request does and does not show.** The Files changed tab
+shows one line replaced by another. It does not show what that means for the
+tenant. The plan summary had to be pasted into the description by hand. That
+gap is exactly what plan-on-pull-request automates, and it is why decision 4
+treats the CI workflow as the part that makes review meaningful rather than
+as polish. A reviewer reading only the HCL diff cannot tell the difference
+between a description change and a change that forces replacement of the app
+and mints a new client ID.
+
+**What this proves and what it does not.** The tenant now has a change whose
+provenance is a commit, an author, a timestamp, and a reviewable diff. What
+it does not prove is enforcement: the merge button was available because
+nothing required another reviewer, and the apply was mine to run or skip.
+The mechanism exists. The control does not.
+
+**The distinction that matters, recorded plainly.** Migrating configuration
+into Terraform was a one-time act. This is the ongoing one. A claim to have
+moved from console clicks to GitOps is a claim about this loop, not about the
+import.
