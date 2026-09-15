@@ -1,0 +1,38 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+
+    env:
+      OKTA_ORG_NAME: ${{ secrets.OKTA_ORG_NAME }}
+      OKTA_BASE_URL: okta.com
+      OKTA_API_CLIENT_ID: ${{ secrets.OKTA_API_CLIENT_ID }}
+      OKTA_API_PRIVATE_KEY_ID: ${{ secrets.OKTA_API_PRIVATE_KEY_ID }}
+      OKTA_API_PRIVATE_KEY: ${{ secrets.OKTA_API_PRIVATE_KEY }}
+      OKTA_API_SCOPES: okta.apps.read,okta.roles.read
+      TF_VAR_okta_org_url: ${{ secrets.TF_VAR_OKTA_ORG_URL }}
+      TF_VAR_mcp_client_id: ${{ secrets.TF_VAR_MCP_CLIENT_ID }}
+      TF_VAR_mcp_jwks_kid: ${{ secrets.TF_VAR_MCP_JWKS_KID }}
+      TF_VAR_mcp_jwks_n: ${{ secrets.TF_VAR_MCP_JWKS_N }}
+      TF_VAR_mcp_auth_policy_id: ${{ secrets.TF_VAR_MCP_AUTH_POLICY_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-west-2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.1
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -no-color

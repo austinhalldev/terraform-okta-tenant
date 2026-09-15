@@ -9,3 +9,4 @@ private_key.json
 .env
 private_key.pem
 *.pem
+.env.ci
