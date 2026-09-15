@@ -18,7 +18,8 @@ manages the configuration that the previous one runs on.
 
 Sessions: 3 September 2026 (scaffold, decisions 1-4), 12 September 2026
 (four objects imported, decisions 5-8), 14 September 2026 (state to S3,
-published, first PR, decisions 9-11).
+published, first PR, decisions 9-11), 15 September 2026 (plan in CI,
+decision 12).
 
 ---
 
@@ -496,3 +497,50 @@ The mechanism exists. The control does not.
 into Terraform was a one-time act. This is the ongoing one. A claim to have
 moved from console clicks to GitOps is a claim about this loop, not about the
 import.
+
+### 12. Plan runs in CI under a credential that cannot apply
+
+A GitHub Actions workflow runs `terraform plan` on every pull request and
+posts the output as a PR comment. It does not apply. The credential it uses
+cannot apply even if the workflow were changed to try.
+
+**The CI credential is a separate Okta service app**, `terraform-okta-tenant-ci`,
+with `okta.apps.read` and `okta.roles.read` and a custom admin role holding
+exactly two permissions: view applications and their details, and view roles,
+resources, and admin assignments. There is no manage scope and no manage
+permission anywhere in the grant.
+
+**This is the least-privilege role that decision 3 could not build.** Apply
+needs to manage roles and resource sets, which Okta can only express as
+Super Administrator. Read needs neither, so the CI credential is a genuine
+custom role scoped to a resource set. The asymmetry is the point: the
+operation that changes things requires the broadest credential in the tenant,
+and the operation that only looks requires almost nothing.
+
+**Why this matters more than the workflow file.** Decision 4 argued for
+plan-only on the grounds that a one-person repository cannot supply the
+review that makes automated apply safe. That was a decision about what the
+pipeline does. This is a decision about what the pipeline *can* do. A
+workflow edited to run apply would fail on permissions rather than succeed.
+The constraint is enforced by the credential, not by the contents of a file
+that any pull request could change.
+
+**Eleven values now live in GitHub Actions secrets.** Tenant identifiers, the
+CI private key, and the AWS credentials for the state backend. That is a
+second store holding the same material as the local `.env`, with its own
+access model and its own set of people who could reach it. Publishing a
+repository and wiring up CI both expand where these values exist; neither
+is free.
+
+**One boundary worth recording precisely.** GitHub redacts registered secrets
+from workflow logs; the MCP client ID appeared as `***` in the run output.
+It did not appear redacted in the plan comment, because the comment body is
+written by the workflow from a file rather than emitted to the log stream.
+Log scrubbing is not a general secret filter. Anything a workflow writes to
+a comment, an artifact, or an external service bypasses it.
+
+**What still is not enforced.** Nothing requires the check to pass before
+merging, because branch protection requiring review cannot be satisfied by a
+single maintainer. The plan is visible; heeding it remains a matter of
+discipline. The mechanism is complete and the control is still partial,
+which is the same shape as decision 11 and for the same reason.
