@@ -81,14 +81,30 @@ every admin object here, so read access to that bucket discloses the tenant's
 privileged configuration, and write access lets Terraform be lied to. The
 bucket policy is scoped to a single IAM user and a single bucket.
 
+## Continuous integration
+
+A GitHub Actions workflow runs `terraform plan` on every pull request and
+posts the output as a comment, so a reviewer sees the effect on the tenant
+rather than only the diff of the configuration.
+
+The workflow authenticates as a separate Okta service app with
+`okta.apps.read` and `okta.roles.read`, bound to a custom admin role holding
+two view permissions and nothing else. It cannot change anything. A pull
+request that edited the workflow to run `terraform apply` would fail on
+permissions rather than succeed.
+
 ## What this does not do
 
-There is no apply-on-merge pipeline. Changes are applied by hand from a
-devcontainer using a super admin credential that stays on one machine.
-The reasoning is in decision 4: a one-person repository cannot satisfy the
-review requirement that makes automated apply safe, and automating it anyway
-would produce a super admin credential on a hair trigger behind a review gate
-that is theater.
+There is no apply-on-merge pipeline. Applying is done by hand from a
+devcontainer using the super admin credential from decision 3, which stays on
+one machine. The reasoning is in decision 4: a one-person repository cannot
+satisfy the review requirement that makes automated apply safe, and
+automating it anyway would produce a super admin credential on a hair trigger
+behind a review gate that is theater.
+
+Nothing requires the plan check to pass before merging. Branch protection
+requiring approval from someone other than the author cannot be satisfied by
+a single maintainer, so the plan is visible but not blocking.
 
 Terraform detects drift. It does not prevent console changes. Making
 configuration genuinely exclusive is an organizational act, requiring reduced
