@@ -8,6 +8,10 @@ jobs:
   plan:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      pull-requests: write
+
     env:
       OKTA_ORG_NAME: ${{ secrets.OKTA_ORG_NAME }}
       OKTA_BASE_URL: okta.com
@@ -35,4 +39,22 @@ jobs:
         run: terraform init
 
       - name: Terraform Plan
-        run: terraform plan -no-color
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan 2>&1 | tee plan.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8');
+            const body = `### Terraform Plan\n\n\`\`\`\n${plan.slice(0, 60000)}\n\`\`\``;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
